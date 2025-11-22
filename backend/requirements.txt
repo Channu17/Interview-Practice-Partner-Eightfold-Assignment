@@ -1,6 +1,8 @@
 fastapi
 uvicorn
+pydantic
 pymongo
 python-dotenv
+requests
 groq
-langchain
+gtts
