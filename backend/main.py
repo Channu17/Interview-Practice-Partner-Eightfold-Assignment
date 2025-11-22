@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import settings
+from routes import api_router
 
 app = FastAPI(title="Interview Practice Partner API")
 
@@ -14,10 +14,14 @@ app.add_middleware(
 )
 
 
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
+
+
 @app.get("/health")
-def health_check():
-    return {
-        "status": "ok",
-        "mongo_configured": bool(settings.mongo_uri),
-        "groq_model": settings.groq_model,
-    }
+def health():
+    return {"status": "ok"}
+
+
+app.include_router(api_router)
