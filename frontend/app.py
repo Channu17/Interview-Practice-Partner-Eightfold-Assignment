@@ -1,4 +1,12 @@
+import os
+
+import requests
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 st.set_page_config(
     page_title="Interview Practice Partner",
@@ -11,6 +19,41 @@ st.markdown(
     """
     <style>
     [data-testid="stSidebar"] { display: none; }
+    .hero {
+        background: radial-gradient(circle at top, #1f5eff, #111938);
+        color: white;
+        padding: 2.5rem;
+        border-radius: 1.5rem;
+        box-shadow: 0 16px 40px rgba(4, 23, 56, 0.35);
+        margin-bottom: 1.5rem;
+    }
+    .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: rgba(255,255,255,0.15);
+        padding: 0.35rem 0.9rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+    }
+    .stepper {
+        display: flex;
+        justify-content: space-between;
+        margin: 1.25rem 0 0.5rem;
+    }
+    .step {
+        flex: 1;
+        text-align: center;
+        color: #8791ad;
+        font-size: 0.85rem;
+    }
+    .step.active { color: #1f5eff; font-weight: 600; }
+    .card {
+        border-radius: 1rem;
+        padding: 1.25rem;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -20,6 +63,8 @@ DEFAULT_STATE = {
     "candidate_name": "",
     "resume_option": "without",
     "resume_file_name": "",
+    "resume_url": "",
+    "resume_present": False,
     "selected_domain_choice": "Sales",
     "custom_domain": "",
     "experience_level": "Intern",
@@ -37,12 +82,61 @@ def go_to(page: str) -> None:
         rerun()
 
 
+def upload_resume_file(uploaded_file) -> None:
+    if uploaded_file is None:
+        return
+
+    with st.spinner("Uploading resume..."):
+        try:
+            files = {
+                "file": (
+                    uploaded_file.name,
+                    uploaded_file.getvalue(),
+                    uploaded_file.type or "application/octet-stream",
+                )
+            }
+            response = requests.post(
+                f"{BACKEND_URL}/upload-resume",
+                files=files,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            st.error(f"Failed to upload resume: {exc}")
+            return
+
+    data = response.json()
+    st.session_state["resume_file_name"] = uploaded_file.name
+    st.session_state["resume_url"] = data.get("resume_url", "")
+    st.session_state["resume_present"] = bool(st.session_state["resume_url"])
+    if st.session_state["resume_url"]:
+        st.success("Resume uploaded successfully.")
+
+
 def render_home() -> None:
-    st.title("Interview Practice Partner")
-    st.subheader("Mock interviews that adapt to you")
-    st.write(
-        "Get ready for realistic interview drills with role-specific prompts, follow-up questions, and post-call feedback. "
-        "Pick a path that fits your goal, test multiple scenarios, and refine your pitch before the real conversation."
+    st.markdown(
+        """
+        <div class="hero">
+            <div class="pill">🎯 Your agentic mock interviewer</div>
+            <h1 style="margin-top: 0.6rem;">Interview Practice Partner</h1>
+            <p style="opacity:0.9; margin-bottom:1.2rem;">
+                Run lifelike mock interviews with dynamic follow-ups, voice-ready flows, and actionable feedback insights.
+                Choose roles, test scenarios, and refine every response with confidence.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="stepper">
+            <span class="step active">1 · Profile</span>
+            <span class="step">2 · Domain</span>
+            <span class="step">3 · Interview</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     if st.button("Get Started", use_container_width=True):
@@ -52,6 +146,7 @@ def render_home() -> None:
 def render_user_info() -> None:
     st.button("← Back", on_click=go_to, args=("home",), key="back_home")
     st.title("Tell us about you")
+    st.caption("We’ll personalize prompts and follow-ups based on your profile.")
 
     name = st.text_input(
         "Full Name",
@@ -69,12 +164,21 @@ def render_user_info() -> None:
     st.session_state["resume_option"] = "with" if resume_choice == options[0] else "without"
 
     if st.session_state["resume_option"] == "with":
-        uploaded_file = st.file_uploader("Upload resume", type=["pdf", "docx"])
+        uploaded_file = st.file_uploader(
+            "Upload resume",
+            type=["pdf", "docx"],
+            key="resume_uploader",
+        )
         if uploaded_file is not None:
-            st.session_state["resume_file_name"] = uploaded_file.name
-            st.success(f"Captured resume: {uploaded_file.name}")
+            should_upload = uploaded_file.name != st.session_state["resume_file_name"]
+            if should_upload:
+                upload_resume_file(uploaded_file)
+        if st.session_state["resume_url"]:
+            st.info(f"Stored resume reference: {st.session_state['resume_file_name']}")
     else:
         st.session_state["resume_file_name"] = ""
+        st.session_state["resume_url"] = ""
+        st.session_state["resume_present"] = False
 
     if st.button("Next", use_container_width=True, key="user_next"):
         go_to("domain")
@@ -83,6 +187,7 @@ def render_user_info() -> None:
 def render_domain_selection() -> None:
     st.button("← Back", on_click=go_to, args=("user_info",), key="back_user")
     st.title("Pick your practice domain")
+    st.caption("Preview upcoming interview packs and plan your practice journey.")
 
     domain_options = [
         "Sales",

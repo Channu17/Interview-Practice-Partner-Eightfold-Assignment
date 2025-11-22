@@ -118,3 +118,7 @@ desktop.ini
 *.log
 *.swp
 *.tmp
+
+# Resume uploads
+backend/resumes/*
+!backend/resumes/.gitkeep
