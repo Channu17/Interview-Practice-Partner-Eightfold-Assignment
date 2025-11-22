@@ -69,6 +69,9 @@ DEFAULT_STATE = {
     "custom_domain": "",
     "experience_level": "Intern",
     "current_page": "home",
+    "voice_transcript": "",
+    "tts_text": "",
+    "tts_audio_bytes": b"",
 }
 
 for key, value in DEFAULT_STATE.items():
@@ -111,6 +114,53 @@ def upload_resume_file(uploaded_file) -> None:
     st.session_state["resume_present"] = bool(st.session_state["resume_url"])
     if st.session_state["resume_url"]:
         st.success("Resume uploaded successfully.")
+
+
+def transcribe_voice_file(uploaded_file) -> str:
+    if uploaded_file is None:
+        return ""
+
+    with st.spinner("Transcribing voice clip..."):
+        try:
+            files = {
+                "file": (
+                    uploaded_file.name,
+                    uploaded_file.getvalue(),
+                    uploaded_file.type or "audio/mpeg",
+                )
+            }
+            response = requests.post(
+                f"{BACKEND_URL}/voice-to-text",
+                files=files,
+                timeout=60,
+            )
+            response.raise_for_status()
+            transcript = response.json().get("transcript", "").strip()
+            st.session_state["voice_transcript"] = transcript
+            return transcript
+        except requests.RequestException as exc:
+            st.error(f"Failed to transcribe audio: {exc}")
+            return ""
+
+
+def synthesize_text_to_voice(text: str) -> bytes:
+    message = (text or "").strip()
+    if not message:
+        return b""
+
+    with st.spinner("Generating audio reply..."):
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/text-to-voice",
+                json={"text": message},
+                timeout=60,
+            )
+            response.raise_for_status()
+            st.session_state["tts_audio_bytes"] = response.content
+            return response.content
+        except requests.RequestException as exc:
+            st.error(f"Failed to generate voice: {exc}")
+            return b""
 
 
 def render_home() -> None:
@@ -234,6 +284,54 @@ def render_domain_selection() -> None:
         st.session_state["experience_level"] = experience_choice
         summary_role = custom_role if domain_choice == "Other" and custom_role else domain_choice
         st.success(f"Saved preferences for {summary_role}. Conversational flow coming soon.")
+
+    st.divider()
+    st.subheader("Voice mode (beta)")
+    st.caption("Convert between spoken and text responses to rehearse hands-free interviews.")
+
+    voice_col, tts_col = st.columns(2)
+
+    with voice_col:
+        st.markdown("**Speech → Text**")
+        voice_upload = st.file_uploader(
+            "Upload an audio note",
+            type=["mp3", "wav", "m4a", "webm"],
+            key="voice_note_uploader",
+        )
+        if st.button("Transcribe voice", use_container_width=True, key="transcribe_voice"):
+            if voice_upload is None:
+                st.warning("Please upload an audio file first.")
+            else:
+                transcript = transcribe_voice_file(voice_upload)
+                if transcript:
+                    st.success("Voice captured.")
+        if st.session_state.get("voice_transcript"):
+            st.text_area(
+                "Recognized speech",
+                value=st.session_state["voice_transcript"],
+                height=160,
+                key="voice_transcript_display",
+                disabled=True,
+            )
+
+    with tts_col:
+        st.markdown("**Text → Speech**")
+        tts_text = st.text_area(
+            "Message to speak",
+            value=st.session_state.get("tts_text", ""),
+            height=160,
+            key="tts_text_area",
+        )
+        st.session_state["tts_text"] = tts_text
+        if st.button("Speak text", use_container_width=True, key="speak_text"):
+            if not tts_text.strip():
+                st.warning("Enter some text to convert to speech.")
+            else:
+                audio_bytes = synthesize_text_to_voice(tts_text)
+                if audio_bytes:
+                    st.success("Generated voice track.")
+        if st.session_state.get("tts_audio_bytes"):
+            st.audio(st.session_state["tts_audio_bytes"], format="audio/mp3")
 
 
 page = st.session_state["current_page"]

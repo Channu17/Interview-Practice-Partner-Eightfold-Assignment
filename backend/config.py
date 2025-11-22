@@ -17,6 +17,7 @@ class Settings(BaseModel):
         "GROQ_MODEL", "exmeta-llama/llama-prompt-guard-2-86m"
     )
     groq_voice: str = os.getenv("GROQ_VOICE", "")
+    gtts_language: str = os.getenv("GTTS_LANGUAGE", "en")
     backend_host: str = os.getenv("BACKEND_HOST", "0.0.0.0")
     backend_port: int = int(os.getenv("BACKEND_PORT", "8000"))
 

@@ -34,6 +34,7 @@ Agentic mock-interview assistant focused on conversation quality. Stage 1 delive
 │   ├── config.py
 │   ├── db/
 │   ├── llm/
+│   ├── audio/
 │   ├── main.py
 │   ├── models/
 │   ├── requirements.txt
@@ -51,3 +52,7 @@ Agentic mock-interview assistant focused on conversation quality. Stage 1 delive
 - Route the Streamlit frontend through the new interview APIs and surface the Groq-generated dialogue.
 - Layer in voice capture/playback (Groq speech + gTTS) for the preferred interaction mode.
 - Expand feedback storage to highlight strengths, growth areas, and recommended practice paths.
+
+## Voice Mode Endpoints
+- `POST /voice-to-text`: Upload MP3/WAV audio to transcribe speech via Groq's Whisper-based API.
+- `POST /text-to-voice`: Provide text to receive an MP3 synthesized with gTTS, ready for playback in the frontend.

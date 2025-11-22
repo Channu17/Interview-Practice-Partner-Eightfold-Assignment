@@ -122,3 +122,7 @@ desktop.ini
 # Resume uploads
 backend/resumes/*
 !backend/resumes/.gitkeep
+
+# Generated audio
+backend/audio/*
+!backend/audio/.gitkeep
