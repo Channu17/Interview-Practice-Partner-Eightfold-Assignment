@@ -1,4 +1,5 @@
 import os
+import html
 from typing import Optional
 
 import requests
@@ -54,6 +55,43 @@ st.markdown(
         padding: 1.25rem;
         background: rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .chat-window {
+        background: rgba(15, 23, 42, 0.45);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 1.25rem;
+        padding: 1.1rem;
+        max-height: 420px;
+        overflow-y: auto;
+    }
+    .chat-row {
+        display: flex;
+        margin-bottom: 0.9rem;
+    }
+    .chat-row.left { justify-content: flex-start; }
+    .chat-row.right { justify-content: flex-end; }
+    .chat-bubble {
+        max-width: 80%;
+        padding: 0.75rem 1rem;
+        border-radius: 1.2rem;
+        font-size: 0.95rem;
+        line-height: 1.4;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+        background: #e5e7eb;
+        color: #111827;
+        border-bottom-left-radius: 0.35rem;
+    }
+    .chat-bubble.user {
+        background: #22c55e;
+        color: #052e16;
+        border-bottom-left-radius: 1.2rem;
+        border-bottom-right-radius: 0.35rem;
+    }
+    .chat-empty {
+        text-align: center;
+        color: #94a3b8;
+        padding: 2rem 0;
+        font-size: 0.95rem;
     }
     </style>
     """,
@@ -406,6 +444,47 @@ def ensure_feedback_audio(feedback: str) -> None:
         st.session_state["feedback_audio_source"] = summary
 
 
+def _format_bubble_text(text: str) -> str:
+    if not text:
+        return "&nbsp;"
+    escaped = html.escape(text.strip())
+    return escaped.replace("\n", "<br/>") or "&nbsp;"
+
+
+def _chat_row_html(text: str, side: str) -> str:
+    bubble_class = "chat-bubble user" if side == "right" else "chat-bubble"
+    row_class = "chat-row right" if side == "right" else "chat-row left"
+    return f"<div class='{row_class}'><div class='{bubble_class}'>{_format_bubble_text(text)}</div></div>"
+
+
+def render_chat_history(history, pending_question: str) -> None:
+    blocks = ["<div class='chat-window'>"]
+    has_rows = False
+
+    for turn in history:
+        question = (turn.get("question") or "").strip()
+        answer = (turn.get("answer") or "").strip()
+        if question:
+            blocks.append(_chat_row_html(question, "left"))
+            has_rows = True
+        if answer:
+            blocks.append(_chat_row_html(answer, "right"))
+            has_rows = True
+
+    pending_question = (pending_question or "").strip()
+    if pending_question:
+        last_question = (history[-1].get("question", "") if history else "").strip()
+        if pending_question != last_question:
+            blocks.append(_chat_row_html(pending_question, "left"))
+            has_rows = True
+
+    if not has_rows:
+        blocks.append("<div class='chat-empty'>No messages yet. Start the interview to receive questions.</div>")
+
+    blocks.append("</div>")
+    st.markdown("\n".join(blocks), unsafe_allow_html=True)
+
+
 def render_home() -> None:
     st.markdown(
         """
@@ -540,7 +619,7 @@ def render_domain_selection() -> None:
 def render_interview_session() -> None:
     st.button("← Back", on_click=go_to, args=("domain",), key="back_to_domain")
     st.title("Interview Playground")
-    st.caption("Answer questions, refine in text or voice, and close with an AI evaluator.")
+    st.caption("Answer in a chat-style flow, then let the evaluator summarize your run.")
 
     summary_role = _resolve_domain_label()
     st.info(f"Practicing for {summary_role} • Experience: {st.session_state.get('experience_level', 'Intern')}")
@@ -552,68 +631,70 @@ def render_interview_session() -> None:
         help="Switch on to upload spoken answers and hear the interviewer and evaluator.",
     )
     st.session_state["use_voice_mode"] = voice_mode
-
     render_alert()
 
     interview_active = bool(st.session_state.get("interview_id"))
-    current_question = (st.session_state.get("interview_question") or "").strip()
+    current_question = (st.session_state.get("interview_question") or "").strip() if interview_active else ""
+    history = st.session_state.get("qa_history", [])
 
     if voice_mode and current_question:
         ensure_question_audio(current_question)
 
-    history = st.session_state.get("qa_history", [])
-    if history:
-        st.subheader("Conversation history")
-        for idx, turn in enumerate(history, start=1):
-            st.markdown(f"**Interviewer Q{idx}:** {turn.get('question', '—')}")
-            st.markdown(f"**You:** {turn.get('answer', '(no response recorded)')}")
-            st.divider()
+    st.subheader("Chat history")
+    render_chat_history(history, current_question if interview_active else "")
+
+    if interview_active and voice_mode and st.session_state.get("question_audio_bytes"):
+        st.audio(st.session_state["question_audio_bytes"], format="audio/mp3")
 
     if interview_active:
-        st.subheader("Current prompt")
-        if current_question:
-            st.markdown(f"**Interviewer:** {current_question}")
-            if voice_mode and st.session_state.get("question_audio_bytes"):
-                st.audio(st.session_state["question_audio_bytes"], format="audio/mp3")
-        else:
-            st.warning("Awaiting the next question from the interviewer...")
-
+        st.subheader("Your response")
         pending_answer = st.session_state.get("pending_answer_text")
         if pending_answer is not None:
             st.session_state["answer_input"] = pending_answer
             st.session_state["pending_answer_text"] = None
 
         st.text_area(
-            "Your answer",
+            "Message",
             key="answer_input",
-            height=180,
-            placeholder="Draft your response or import it from a voice clip.",
+            height=140,
+            placeholder="Type your reply or drop in the transcription before sending...",
         )
 
+        voice_upload = None
         if voice_mode:
-            st.markdown("**Answer with audio**")
-            voice_answer = st.file_uploader(
-                "Upload a spoken response",
+            st.caption("🎙️ Voice reply (optional)")
+            voice_upload = st.file_uploader(
+                "Upload your audio response",
                 type=["mp3", "wav", "m4a", "webm"],
                 key="voice_answer_uploader",
             )
-            if st.button("Transcribe answer clip", use_container_width=True, key="transcribe_answer_btn"):
-                if voice_answer is None:
-                    st.warning("Please upload an audio file before transcribing.")
-                else:
-                    transcript = transcribe_voice_file(voice_answer)
-                    if transcript:
-                        st.session_state["pending_answer_text"] = transcript
-                        set_alert("Transcript captured. Updating your draft...", "success")
-                        _request_rerun()
 
-        action_col1, action_col2 = st.columns([1, 1])
-        with action_col1:
-            if st.button("Submit answer", use_container_width=True, key="submit_answer_btn"):
-                submit_answer_to_mock_interview(st.session_state.get("answer_input", ""))
-        with action_col2:
-            if st.button("Finish interview", use_container_width=True, key="finish_interview_btn"):
+        send_col, finish_col, mic_col = st.columns([3, 2, 1])
+        send_clicked = False
+        with send_col:
+            send_clicked = st.button("Send", use_container_width=True, key="send_answer_btn")
+        with finish_col:
+            if st.button("Finish", use_container_width=True, key="finish_interview_btn"):
                 complete_mock_interview()
+        mic_clicked = False
+        with mic_col:
+            if voice_mode:
+                mic_clicked = st.button("🎙️", use_container_width=True, key="transcribe_answer_btn")
+
+        if send_clicked:
+            submit_answer_to_mock_interview(st.session_state.get("answer_input", ""))
+
+        if mic_clicked:
+            if voice_upload is None:
+                set_alert("Upload an audio file before transcribing.", "warning")
+            else:
+                transcript = transcribe_voice_file(voice_upload)
+                if transcript:
+                    st.session_state["pending_answer_text"] = transcript
+                    set_alert("Transcript captured. Review and press Send.", "success")
+                    _request_rerun()
+        elif voice_mode and voice_upload is None:
+            st.caption("Select an audio clip above, then tap 🎙️ to transcribe it into the chat box.")
     else:
         st.info("No active session yet. Start when you're ready to practice.")
         if not st.session_state.get("user_id"):
