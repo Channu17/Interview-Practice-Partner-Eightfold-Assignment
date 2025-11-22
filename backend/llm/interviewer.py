@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, List, Optional
 
 from groq import Groq
 
 from config import settings
 
-DEFAULT_MODEL = "exmeta-llama/llama-prompt-guard-2-86m"
+DEFAULT_MODEL = "llama-3.1-8b-instant"
 FALLBACK_QUESTION = "Could you walk me through a project you're proud of?"
 
 _client: Optional[Groq] = None
+logger = logging.getLogger(__name__)
 
 
 def _get_client() -> Optional[Groq]:
@@ -50,6 +52,7 @@ def generate_interview_question(
 
     client = _get_client()
     if client is None:
+        logger.warning("Groq client not configured; returning fallback question")
         return FALLBACK_QUESTION
 
     history_text = _history_to_text(history)
@@ -77,5 +80,6 @@ def generate_interview_question(
         )
         content = response.choices[0].message.content.strip()
         return content or FALLBACK_QUESTION
-    except Exception:
+    except Exception as exc:
+        logger.exception("Groq question generation failed: %s", exc)
         return FALLBACK_QUESTION

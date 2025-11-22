@@ -1,3 +1,4 @@
+from itertools import zip_longest
 from typing import List
 
 from bson import ObjectId
@@ -5,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from db import get_interviews_collection
-from llm import generate_interview_question
+from llm import evaluate_interview, generate_interview_question
 from models import InterviewSession
 
 router = APIRouter()
@@ -125,10 +126,27 @@ def end_interview(payload: EndInterviewRequest):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid interview id")
 
-    update_result = collection.update_one(
-        {"_id": interview_object_id, "user_id": payload.user_id},
-        {"$set": {"status": "completed"}},
-    )
-    if update_result.matched_count == 0:
+    session = collection.find_one({"_id": interview_object_id, "user_id": payload.user_id})
+    if session is None:
         raise HTTPException(status_code=404, detail="Interview not found")
-    return {"feedback": "Thank you for completing the mock interview."}
+
+    history: List[dict[str, str]] = [
+        {"question": question or "", "answer": answer or ""}
+        for question, answer in zip_longest(
+            session.get("questions", []),
+            session.get("answers", []),
+            fillvalue="",
+        )
+    ]
+
+    feedback = evaluate_interview(
+        history,
+        session.get("domain", ""),
+        session.get("experience", ""),
+    )
+
+    collection.update_one(
+        {"_id": interview_object_id, "user_id": payload.user_id},
+        {"$set": {"status": "completed", "feedback": feedback}},
+    )
+    return {"feedback": feedback}

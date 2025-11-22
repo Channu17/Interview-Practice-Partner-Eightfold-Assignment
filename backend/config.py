@@ -14,7 +14,7 @@ class Settings(BaseModel):
     mongo_db_name: str = os.getenv("MONGO_DB_NAME", "interview_practice")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     groq_model: str = os.getenv(
-        "GROQ_MODEL", "exmeta-llama/llama-prompt-guard-2-86m"
+        "GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"
     )
     groq_voice: str = os.getenv("GROQ_VOICE", "")
     gtts_language: str = os.getenv("GTTS_LANGUAGE", "en")
