@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import requests
 import streamlit as st
@@ -72,17 +73,59 @@ DEFAULT_STATE = {
     "voice_transcript": "",
     "tts_text": "",
     "tts_audio_bytes": b"",
+    "user_id": "",
+    "use_voice_mode": False,
+    "interview_id": "",
+    "interview_question": "",
+    "last_interview_id": "",
+    "answer_input": "",
+    "evaluation_feedback": "",
+    "feedback_audio_bytes": b"",
+    "feedback_audio_source": "",
+    "question_audio_bytes": b"",
+    "question_audio_source": "",
+    "pending_answer_text": None,
+    "alert_message": "",
+    "alert_level": "info",
 }
 
 for key, value in DEFAULT_STATE.items():
     st.session_state.setdefault(key, value)
 
+if "qa_history" not in st.session_state:
+    st.session_state["qa_history"] = []
 
-def go_to(page: str) -> None:
-    st.session_state["current_page"] = page
+
+def _request_rerun() -> None:
     rerun = getattr(st, "rerun", getattr(st, "experimental_rerun", None))
     if rerun:
         rerun()
+
+
+def set_alert(message: str, level: str = "info") -> None:
+    st.session_state["alert_message"] = message
+    st.session_state["alert_level"] = level
+
+
+def render_alert() -> None:
+    message = (st.session_state.get("alert_message") or "").strip()
+    level = st.session_state.get("alert_level", "info")
+    if not message:
+        return
+    if level == "warning":
+        st.warning(message)
+    elif level == "error":
+        st.error(message)
+    elif level == "success":
+        st.success(message)
+    else:
+        st.info(message)
+    st.session_state["alert_message"] = ""
+
+
+def go_to(page: str) -> None:
+    st.session_state["current_page"] = page
+    _request_rerun()
 
 
 def upload_resume_file(uploaded_file) -> None:
@@ -143,7 +186,7 @@ def transcribe_voice_file(uploaded_file) -> str:
             return ""
 
 
-def synthesize_text_to_voice(text: str) -> bytes:
+def synthesize_text_to_voice(text: str, state_key: Optional[str] = "tts_audio_bytes") -> bytes:
     message = (text or "").strip()
     if not message:
         return b""
@@ -156,11 +199,211 @@ def synthesize_text_to_voice(text: str) -> bytes:
                 timeout=60,
             )
             response.raise_for_status()
-            st.session_state["tts_audio_bytes"] = response.content
+            if state_key:
+                st.session_state[state_key] = response.content
             return response.content
         except requests.RequestException as exc:
             st.error(f"Failed to generate voice: {exc}")
             return b""
+
+
+def _resolve_domain_label() -> str:
+    choice = (st.session_state.get("selected_domain_choice") or "Sales").strip()
+    custom = (st.session_state.get("custom_domain") or "").strip()
+    if choice == "Other" and custom:
+        return custom
+    return choice or "Sales"
+
+
+def get_user_identifier() -> str:
+    stored_id = (st.session_state.get("user_id") or "").strip()
+    if stored_id:
+        return stored_id
+    fallback = (st.session_state.get("candidate_name") or "").strip()
+    return fallback or "guest-user"
+
+
+def register_user_profile() -> bool:
+    name = (st.session_state.get("candidate_name") or "").strip()
+    if not name:
+        st.warning("Please enter your name before continuing.")
+        return False
+
+    payload = {
+        "name": name,
+        "resume_present": bool(st.session_state.get("resume_url")),
+        "resume_url": st.session_state.get("resume_url") or None,
+        "domain": _resolve_domain_label(),
+        "experience": st.session_state.get("experience_level", "Intern"),
+    }
+
+    with st.spinner("Saving your profile..."):
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/register-user",
+                json=payload,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            st.error(f"Unable to register: {exc}")
+            return False
+
+    user_id = (response.json().get("user_id") or "").strip()
+    if not user_id:
+        st.error("Registration succeeded but no user id was returned.")
+        return False
+
+    st.session_state["user_id"] = user_id
+    st.success("Profile stored. Next, configure your practice domain.")
+    return True
+
+
+def start_mock_interview() -> None:
+    user_id = get_user_identifier()
+    if not st.session_state.get("user_id"):
+        st.warning("Please register on the previous step before starting an interview.")
+        return
+    payload = {
+        "user_id": user_id,
+        "domain": _resolve_domain_label(),
+        "experience": st.session_state.get("experience_level", "Intern"),
+    }
+
+    with st.spinner("Starting interview..."):
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/start-interview",
+                json=payload,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            st.error(f"Unable to start interview: {exc}")
+            return
+
+    data = response.json()
+    question = data.get("question", "").strip()
+    st.session_state["interview_id"] = data.get("interview_id", "")
+    st.session_state["interview_question"] = question
+    st.session_state["qa_history"] = []
+    st.session_state["pending_answer_text"] = ""
+    st.session_state["evaluation_feedback"] = ""
+    st.session_state["feedback_audio_bytes"] = b""
+    st.session_state["feedback_audio_source"] = ""
+    st.session_state["question_audio_bytes"] = b""
+    st.session_state["question_audio_source"] = ""
+    if question:
+        set_alert("Interview started. First question is ready.", "success")
+        ensure_question_audio(question)
+    _request_rerun()
+
+
+def submit_answer_to_mock_interview(answer: str) -> None:
+    text = (answer or "").strip()
+    if not text:
+        st.warning("Add an answer before submitting.")
+        return
+
+    interview_id = st.session_state.get("interview_id")
+    if not interview_id:
+        st.warning("Start an interview first.")
+        return
+
+    payload = {
+        "interview_id": interview_id,
+        "user_id": get_user_identifier(),
+        "answer": text,
+    }
+
+    with st.spinner("Submitting answer..."):
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/process-answer",
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            st.error(f"Unable to process answer: {exc}")
+            return
+
+    next_question = response.json().get("question", "").strip()
+    st.session_state.setdefault("qa_history", [])
+    st.session_state["qa_history"].append(
+        {
+            "question": st.session_state.get("interview_question", ""),
+            "answer": text,
+        }
+    )
+    st.session_state["interview_question"] = next_question
+    st.session_state["pending_answer_text"] = ""
+    set_alert("Answer logged. Awaiting the next prompt.")
+    if not next_question:
+        set_alert("No further questions returned. End the interview to fetch feedback.", "warning")
+    else:
+        ensure_question_audio(next_question)
+    _request_rerun()
+
+
+def complete_mock_interview() -> None:
+    interview_id = st.session_state.get("interview_id")
+    if not interview_id:
+        st.warning("No active interview to end.")
+        return
+
+    payload = {
+        "interview_id": interview_id,
+        "user_id": get_user_identifier(),
+    }
+
+    with st.spinner("Generating evaluation..."):
+        try:
+            response = requests.post(
+                f"{BACKEND_URL}/end-interview",
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            st.error(f"Unable to end interview: {exc}")
+            return
+
+    feedback = response.json().get("feedback", "").strip()
+    st.session_state["evaluation_feedback"] = feedback or "Thanks for completing the mock interview."
+    st.session_state["last_interview_id"] = interview_id
+    st.session_state["interview_id"] = ""
+    st.session_state["interview_question"] = ""
+    st.session_state["pending_answer_text"] = None
+    st.session_state["feedback_audio_bytes"] = b""
+    st.session_state["feedback_audio_source"] = ""
+    st.session_state["question_audio_bytes"] = b""
+    st.session_state["question_audio_source"] = ""
+    set_alert("Evaluator feedback ready.", "success")
+    ensure_feedback_audio(st.session_state["evaluation_feedback"])
+    _request_rerun()
+
+
+def ensure_question_audio(question: str) -> None:
+    question_text = (question or "").strip()
+    if not question_text or not st.session_state.get("use_voice_mode"):
+        return
+    if st.session_state.get("question_audio_source") == question_text:
+        return
+    audio_bytes = synthesize_text_to_voice(question_text, state_key="question_audio_bytes")
+    if audio_bytes:
+        st.session_state["question_audio_source"] = question_text
+
+
+def ensure_feedback_audio(feedback: str) -> None:
+    summary = (feedback or "").strip()
+    if not summary or not st.session_state.get("use_voice_mode"):
+        return
+    if st.session_state.get("feedback_audio_source") == summary:
+        return
+    audio_bytes = synthesize_text_to_voice(summary, state_key="feedback_audio_bytes")
+    if audio_bytes:
+        st.session_state["feedback_audio_source"] = summary
 
 
 def render_home() -> None:
@@ -231,7 +474,11 @@ def render_user_info() -> None:
         st.session_state["resume_present"] = False
 
     if st.button("Next", use_container_width=True, key="user_next"):
-        go_to("domain")
+        if register_user_profile():
+            go_to("domain")
+
+    if st.session_state.get("user_id"):
+        st.caption(f"Registered user id: {st.session_state['user_id']}")
 
 
 def render_domain_selection() -> None:
@@ -279,59 +526,116 @@ def render_domain_selection() -> None:
     )
 
     if st.button("Next", use_container_width=True, key="domain_next"):
-        st.session_state["selected_domain_choice"] = domain_choice
-        st.session_state["custom_domain"] = custom_role
-        st.session_state["experience_level"] = experience_choice
-        summary_role = custom_role if domain_choice == "Other" and custom_role else domain_choice
-        st.success(f"Saved preferences for {summary_role}. Conversational flow coming soon.")
+        if not st.session_state.get("user_id"):
+            st.warning("Please register on the previous step before continuing.")
+        else:
+            st.session_state["selected_domain_choice"] = domain_choice
+            st.session_state["custom_domain"] = custom_role
+            st.session_state["experience_level"] = experience_choice
+            st.session_state["qa_history"] = []
+            st.session_state["evaluation_feedback"] = ""
+            go_to("interview")
 
-    st.divider()
-    st.subheader("Voice mode (beta)")
-    st.caption("Convert between spoken and text responses to rehearse hands-free interviews.")
 
-    voice_col, tts_col = st.columns(2)
+def render_interview_session() -> None:
+    st.button("← Back", on_click=go_to, args=("domain",), key="back_to_domain")
+    st.title("Interview Playground")
+    st.caption("Answer questions, refine in text or voice, and close with an AI evaluator.")
 
-    with voice_col:
-        st.markdown("**Speech → Text**")
-        voice_upload = st.file_uploader(
-            "Upload an audio note",
-            type=["mp3", "wav", "m4a", "webm"],
-            key="voice_note_uploader",
+    summary_role = _resolve_domain_label()
+    st.info(f"Practicing for {summary_role} • Experience: {st.session_state.get('experience_level', 'Intern')}")
+
+    voice_mode = st.toggle(
+        "Voice mode (speak & listen)",
+        value=st.session_state.get("use_voice_mode", False),
+        key="voice_mode_toggle",
+        help="Switch on to upload spoken answers and hear the interviewer and evaluator.",
+    )
+    st.session_state["use_voice_mode"] = voice_mode
+
+    render_alert()
+
+    interview_active = bool(st.session_state.get("interview_id"))
+    current_question = (st.session_state.get("interview_question") or "").strip()
+
+    if voice_mode and current_question:
+        ensure_question_audio(current_question)
+
+    history = st.session_state.get("qa_history", [])
+    if history:
+        st.subheader("Conversation history")
+        for idx, turn in enumerate(history, start=1):
+            st.markdown(f"**Interviewer Q{idx}:** {turn.get('question', '—')}")
+            st.markdown(f"**You:** {turn.get('answer', '(no response recorded)')}")
+            st.divider()
+
+    if interview_active:
+        st.subheader("Current prompt")
+        if current_question:
+            st.markdown(f"**Interviewer:** {current_question}")
+            if voice_mode and st.session_state.get("question_audio_bytes"):
+                st.audio(st.session_state["question_audio_bytes"], format="audio/mp3")
+        else:
+            st.warning("Awaiting the next question from the interviewer...")
+
+        pending_answer = st.session_state.get("pending_answer_text")
+        if pending_answer is not None:
+            st.session_state["answer_input"] = pending_answer
+            st.session_state["pending_answer_text"] = None
+
+        st.text_area(
+            "Your answer",
+            key="answer_input",
+            height=180,
+            placeholder="Draft your response or import it from a voice clip.",
         )
-        if st.button("Transcribe voice", use_container_width=True, key="transcribe_voice"):
-            if voice_upload is None:
-                st.warning("Please upload an audio file first.")
-            else:
-                transcript = transcribe_voice_file(voice_upload)
-                if transcript:
-                    st.success("Voice captured.")
-        if st.session_state.get("voice_transcript"):
-            st.text_area(
-                "Recognized speech",
-                value=st.session_state["voice_transcript"],
-                height=160,
-                key="voice_transcript_display",
-                disabled=True,
+
+        if voice_mode:
+            st.markdown("**Answer with audio**")
+            voice_answer = st.file_uploader(
+                "Upload a spoken response",
+                type=["mp3", "wav", "m4a", "webm"],
+                key="voice_answer_uploader",
             )
+            if st.button("Transcribe answer clip", use_container_width=True, key="transcribe_answer_btn"):
+                if voice_answer is None:
+                    st.warning("Please upload an audio file before transcribing.")
+                else:
+                    transcript = transcribe_voice_file(voice_answer)
+                    if transcript:
+                        st.session_state["pending_answer_text"] = transcript
+                        set_alert("Transcript captured. Updating your draft...", "success")
+                        _request_rerun()
 
-    with tts_col:
-        st.markdown("**Text → Speech**")
-        tts_text = st.text_area(
-            "Message to speak",
-            value=st.session_state.get("tts_text", ""),
-            height=160,
-            key="tts_text_area",
-        )
-        st.session_state["tts_text"] = tts_text
-        if st.button("Speak text", use_container_width=True, key="speak_text"):
-            if not tts_text.strip():
-                st.warning("Enter some text to convert to speech.")
-            else:
-                audio_bytes = synthesize_text_to_voice(tts_text)
-                if audio_bytes:
-                    st.success("Generated voice track.")
-        if st.session_state.get("tts_audio_bytes"):
-            st.audio(st.session_state["tts_audio_bytes"], format="audio/mp3")
+        action_col1, action_col2 = st.columns([1, 1])
+        with action_col1:
+            if st.button("Submit answer", use_container_width=True, key="submit_answer_btn"):
+                submit_answer_to_mock_interview(st.session_state.get("answer_input", ""))
+        with action_col2:
+            if st.button("Finish interview", use_container_width=True, key="finish_interview_btn"):
+                complete_mock_interview()
+    else:
+        st.info("No active session yet. Start when you're ready to practice.")
+        if not st.session_state.get("user_id"):
+            st.warning("Please complete profile + domain setup first.")
+        if st.button("Start interview", use_container_width=True, key="start_interview_btn"):
+            start_mock_interview()
+
+    feedback = (st.session_state.get("evaluation_feedback") or "").strip()
+    if feedback:
+        st.divider()
+        st.subheader("Evaluator feedback")
+        st.write(feedback)
+        if voice_mode:
+            ensure_feedback_audio(feedback)
+        else:
+            if st.button("Convert feedback to audio", key="convert_feedback_audio"):
+                synthesize_text_to_voice(feedback, state_key="feedback_audio_bytes")
+                st.session_state["feedback_audio_source"] = feedback
+        if st.session_state.get("feedback_audio_bytes"):
+            st.audio(st.session_state["feedback_audio_bytes"], format="audio/mp3")
+        if st.session_state.get("last_interview_id"):
+            st.caption(f"Last evaluated session id: {st.session_state['last_interview_id']}")
 
 
 page = st.session_state["current_page"]
@@ -340,5 +644,7 @@ if page == "home":
     render_home()
 elif page == "user_info":
     render_user_info()
-else:
+elif page == "domain":
     render_domain_selection()
+else:
+    render_interview_session()
