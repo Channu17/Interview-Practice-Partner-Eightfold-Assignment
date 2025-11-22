@@ -25,26 +25,29 @@ Agentic mock-interview assistant focused on conversation quality. Stage 1 delive
 	pip install -r requirements.txt  # already run once
 	streamlit run app.py --server.port 8501
 	```
-4. Visit `http://localhost:8501` and use the Ping API button to verify the FastAPI health endpoint.
+4. Visit `http://localhost:8501` to use the Streamlit flow. Make sure `GROQ_API_KEY` is set so the interviewer can fetch new questions from Groq.
 
 ## Folder Structure
 ```
 .
 ├── backend
 │   ├── config.py
+│   ├── db/
+│   ├── llm/
 │   ├── main.py
+│   ├── models/
 │   ├── requirements.txt
-│   └── .venv/
+│   ├── resumes/
+│   └── routes/
 ├── frontend
 │   ├── app.py
-│   ├── requirements.txt
-│   └── .venv/
+│   └── requirements.txt
 ├── .env.example
 ├── .gitignore
 └── README.md
 ```
 
 ## Next Steps
-- Implement Groq-powered interviewer logic and follow-up flow.
-- Add audio capture/playback with Groq speech-to-text and gTTS for responses.
-- Persist interview transcripts and feedback notes in MongoDB.
+- Route the Streamlit frontend through the new interview APIs and surface the Groq-generated dialogue.
+- Layer in voice capture/playback (Groq speech + gTTS) for the preferred interaction mode.
+- Expand feedback storage to highlight strengths, growth areas, and recommended practice paths.
