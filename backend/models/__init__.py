@@ -1,4 +1,4 @@
-from .user_model import User
+from .user_model import UserRegistration
 from .interview_model import InterviewSession
 
-__all__ = ["User", "InterviewSession"]
+__all__ = ["UserRegistration", "InterviewSession"]

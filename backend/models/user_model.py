@@ -1,7 +1,11 @@
-from pydantic import BaseModel, EmailStr
+from typing import Optional
+
+from pydantic import BaseModel
 
 
-class User(BaseModel):
+class UserRegistration(BaseModel):
     name: str
-    email: EmailStr
-    role: str
+    resume_present: bool = False
+    resume_url: Optional[str] = None
+    domain: Optional[str] = None
+    experience: Optional[str] = None
