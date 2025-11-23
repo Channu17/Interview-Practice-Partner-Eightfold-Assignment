@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -5,11 +6,18 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from db import get_db
 from models import UserRegistration
+from resume_parser import build_resume_context, extract_resume_text
 
 router = APIRouter()
 
 RESUME_DIR = Path(__file__).resolve().parent.parent / "resumes"
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
+logger = logging.getLogger(__name__)
+
+
+def _resolve_resume_path(resume_reference: str) -> Path:
+    safe_name = Path(resume_reference).name
+    return RESUME_DIR / safe_name
 
 @router.post("/register-user")
 def register_user(payload: UserRegistration):
@@ -21,7 +29,18 @@ def register_user(payload: UserRegistration):
         )
 
     document = payload.model_dump()
-    document["resume_present"] = bool(document.get("resume_url"))
+    resume_url = document.get("resume_url") or ""
+    resume_context = ""
+    if resume_url:
+        resume_path = _resolve_resume_path(resume_url)
+        resume_text = extract_resume_text(resume_path)
+        resume_context = build_resume_context(resume_text)
+        if resume_context:
+            document["resume_context"] = resume_context
+        else:
+            logger.warning("Resume provided for user %s but parsing yielded no text", payload.name)
+
+    document["resume_present"] = bool(resume_url)
 
     result = db["users"].insert_one(document)
     print(f"Inserted user {result.inserted_id}")

@@ -7,3 +7,5 @@ requests
 groq
 gtts
 python-multipart
+pypdf
+python-docx

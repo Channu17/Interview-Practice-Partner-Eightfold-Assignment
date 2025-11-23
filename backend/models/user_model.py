@@ -9,3 +9,4 @@ class UserRegistration(BaseModel):
     resume_url: Optional[str] = None
     domain: Optional[str] = None
     experience: Optional[str] = None
+    resume_context: Optional[str] = None
