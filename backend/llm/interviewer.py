@@ -11,6 +11,9 @@ from config import settings
 
 DEFAULT_MODEL = "llama-3.1-8b-instant"
 FALLBACK_QUESTION = "Could you walk me through a project you're proud of?"
+MAX_GENERATION_ATTEMPTS = 3
+MAX_HISTORY_TURNS = 6
+MAX_ASKED_TRACK = 12
 BehaviorCategory = Literal[
     "Confused User",
     "Efficient User",
@@ -119,6 +122,17 @@ def _parse_question_result(content: str) -> QuestionResult:
     }
 
 
+def _should_retry(question: str, asked_questions: List[str]) -> bool:
+    normalized = (question or "").strip()
+    if not normalized:
+        return True
+    if normalized == FALLBACK_QUESTION:
+        return True
+    if normalized in asked_questions:
+        return True
+    return False
+
+
 def generate_interview_question(
     history: Iterable[dict[str, str]],
     domain: str,
@@ -129,7 +143,7 @@ def generate_interview_question(
 ) -> QuestionResult:
     """Return the next interview question and detected behavior."""
 
-    turns = list(history)
+    turns = list(history)[-MAX_HISTORY_TURNS:]
     client = _get_client()
     normalized_override = _normalize_behavior_label(behavior_override)
     session_stage = "opening" if not turns else "follow-up"
@@ -137,7 +151,7 @@ def generate_interview_question(
         (turn.get("question") or "").strip()
         for turn in turns
         if (turn.get("question") or "").strip()
-    ]
+    ][-MAX_ASKED_TRACK:]
     asked_block = "\n".join(f"- {question}" for question in asked_questions) or "- None yet"
     variation_token = secrets.token_hex(3)
 
@@ -162,7 +176,7 @@ def generate_interview_question(
         if normalized_override
         else ""
     )
-    user_message = (
+    base_user_message = (
         "Interview context:\n"
         f"- Role/Domain: {domain or 'General'}\n"
         f"- Experience: {experience or 'Unspecified'}\n"
@@ -186,24 +200,40 @@ def generate_interview_question(
         "Remember to reply ONLY with JSON containing 'behavior' and 'question'."
     )
 
-    try:
-        response = client.chat.completions.create(
-            model=settings.groq_model or DEFAULT_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.55,
-            max_tokens=220,
-        )
-        content = response.choices[0].message.content.strip()
-        parsed = _parse_question_result(content)
-        if normalized_override:
-            parsed["behavior"] = normalized_override
-        return parsed
-    except Exception as exc:
-        logger.exception("Groq question generation failed: %s", exc)
-        return {
-            "question": FALLBACK_QUESTION,
-            "behavior": normalized_override or DEFAULT_BEHAVIOR,
-        }
+    last_error: Optional[Exception] = None
+    attempt_hint = ""
+    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+        try:
+            user_message = base_user_message + attempt_hint
+            response = client.chat.completions.create(
+                model=settings.groq_model or DEFAULT_MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.55,
+                max_tokens=220,
+            )
+            content = response.choices[0].message.content.strip()
+            parsed = _parse_question_result(content)
+            if normalized_override:
+                parsed["behavior"] = normalized_override
+            if _should_retry(parsed.get("question", ""), asked_questions) and attempt < MAX_GENERATION_ATTEMPTS:
+                logger.warning(
+                    "Retrying question generation (attempt %s) due to invalid/duplicate output", attempt
+                )
+                duplicate = (parsed.get("question") or "").strip() or "(empty output)"
+                attempt_hint = (
+                    "\nCritical reminder: the previous completion repeated "
+                    f"'{duplicate}'. Provide a NEW, distinct question not in the asked list above."
+                )
+                continue
+            return parsed
+        except Exception as exc:
+            last_error = exc
+            logger.exception("Groq question generation failed on attempt %s: %s", attempt, exc)
+
+    return {
+        "question": FALLBACK_QUESTION,
+        "behavior": normalized_override or DEFAULT_BEHAVIOR,
+    }

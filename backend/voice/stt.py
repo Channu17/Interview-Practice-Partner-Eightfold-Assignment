@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from io import BytesIO
 from typing import Optional
 
 from groq import Groq
@@ -8,6 +10,7 @@ from config import settings
 
 SPEECH_MODEL = "whisper-large-v3"
 _client: Optional[Groq] = None
+logger = logging.getLogger(__name__)
 
 
 def _get_client() -> Optional[Groq]:
@@ -24,17 +27,23 @@ def transcribe_audio(
 ) -> str:
     client = _get_client()
     if client is None or not file_bytes:
+        logger.warning("Transcription skipped: missing client or empty audio payload")
         return ""
+
+    buffer = BytesIO(file_bytes)
+    buffer.name = filename or "audio.wav"
+    buffer.seek(0)
 
     try:
         response = client.audio.transcriptions.create(
             model=SPEECH_MODEL,
-            file=(filename or "audio.mp3", file_bytes, mime_type or "audio/mpeg"),
+            file=buffer,
             response_format="json",
         )
         text = getattr(response, "text", "")
         if not text and isinstance(response, dict):
             text = response.get("text", "")
         return text.strip()
-    except Exception:
+    except Exception as exc:
+        logger.exception("Groq transcription failed: %s", exc)
         return ""

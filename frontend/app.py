@@ -516,7 +516,7 @@ def render_user_info() -> None:
         name = st.text_input(
             "Full Name",
             value=st.session_state["candidate_name"],
-            placeholder="Alex Candidate",
+            placeholder="Your Name",
         )
         st.session_state["candidate_name"] = name
 
