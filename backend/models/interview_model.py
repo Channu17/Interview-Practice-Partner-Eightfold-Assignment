@@ -11,4 +11,5 @@ class InterviewSession(BaseModel):
     answers: List[str] = Field(default_factory=list)
     behaviors: List[str] = Field(default_factory=list)
     resume_context: Optional[str] = None
+    candidate_name: Optional[str] = None
     status: str = "active"

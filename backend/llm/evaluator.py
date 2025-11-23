@@ -24,8 +24,8 @@ def _get_client() -> Optional[Groq]:
 
 
 EVALUATOR_SYSTEM_PROMPT = (
-    "You are an experienced technical interviewer who also partners with HR. "
-    "Review the full mock interview, balance rigor with encouragement, and deliver concise coaching insights."
+    "You are a bar-raising technical interviewer who delivers candid, detail-rich critiques. "
+    "Call out weak or incomplete answers, note any risk areas for the role, and balance brief praise with actionable criticism."
 )
 
 
@@ -62,13 +62,13 @@ def evaluate_interview(
         "Conversation transcript:\n"
         f"{history_text}\n\n"
         "Produce brief plain-text paragraphs (no bullet lists) that cover:\n"
-        "- Communication quality.\n"
-        "- Technical depth relative to the role.\n"
-        "- Observed confidence or executive presence.\n"
-        "- Structure & clarity of explanations.\n"
-        "- 2-3 specific improvement areas.\n"
-        "- Final summary score such as 'Overall: Solid (7/10)'.\n"
-        "Keep the tone professional yet encouraging, stay under roughly 180 words, and avoid markdown tables."
+        "- Communication quality (note hesitations or fluff).\n"
+        "- Technical depth relative to the stated role; highlight any gaps or missing fundamentals.\n"
+        "- Observed confidence/executive presence plus listening skills.\n"
+        "- Structure & clarity of explanations, including any rambling or unanswered prompts.\n"
+        "- 3 pointed improvement actions (skills, preparation, delivery).\n"
+        "- Final summary verdict such as 'Overall: Needs Work (5/10)' with a short justification.\n"
+        "Adopt a stricter coaching tone: be professional but frank, emphasize shortcomings before strengths, and keep the response under ~180 words without markdown tables."
     )
 
     try:

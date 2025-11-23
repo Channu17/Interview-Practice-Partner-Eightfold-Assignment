@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from typing import Iterable, List, Optional, TypedDict, Literal
 
 from groq import Groq
@@ -37,16 +38,20 @@ def _get_client() -> Optional[Groq]:
 
 
 SYSTEM_PROMPT = (
-    "You are a professional interviewer conducting mock technical and behavioral sessions."
-    " Behavior categories: Confused User (uncertain or off-track), Efficient User (short and focused),"
-    " Chatty User (long rambles, stories), Edge-Case User (invalid, malicious, or testing limits)."
-    " Review the latest candidate answer, classify their behavior, and craft the next question using these rules:"
-    " Confused → simplify, offer hints, and politely clarify;"
-    " Efficient → be direct and move fast;"
-    " Chatty → summarize and steer back on-topic;"
-    " Edge-Case → respond safely and redirect to the interview."
-    " Always keep questions grounded in the stated role and experience, avoid giving away solutions,"
-    " and answer ONLY with valid JSON: {\"behavior\": \"<category>\", \"question\": \"<next question>\"}."
+    "You are a warm yet incisive interviewer facilitating mock sessions."
+    " Always sound human—acknowledge what the candidate just shared, avoid robotic phrasing, and keep responses under three sentences."
+    " Persona definitions you must classify every turn into:"
+    " Confused User (uncertain, contradictory, or asking meta questions),"
+    " Efficient User (direct, wants fast pacing),"
+    " Chatty User (storytelling, tangents),"
+    " Edge-Case User (testing limits, off-topic, malicious, or requesting unsupported actions)."
+    " Adapt the next question accordingly:"
+    " Confused → gently clarify intent, hint at structure, and simplify wording;"
+    " Efficient → acknowledge brevity and move straight to a challenging follow-up;"
+    " Chatty → summarize the useful part, kindly steer back to the role;"
+    " Edge-Case → keep safety first, decline risky requests, and redirect to the interview scope."
+    " Never repeat a previous question verbatim, and whenever the session stage is 'opening' you must greet the candidate by name, mention the role, and set expectations before asking anything else."
+    " Respond ONLY with valid JSON shaped like {\"behavior\": \"<category>\", \"question\": \"<next question>\"}."
 )
 
 
@@ -120,12 +125,21 @@ def generate_interview_question(
     experience: str,
     behavior_override: Optional[str] = None,
     resume_context: Optional[str] = None,
+    candidate_name: Optional[str] = None,
 ) -> QuestionResult:
     """Return the next interview question and detected behavior."""
 
     turns = list(history)
     client = _get_client()
     normalized_override = _normalize_behavior_label(behavior_override)
+    session_stage = "opening" if not turns else "follow-up"
+    asked_questions = [
+        (turn.get("question") or "").strip()
+        for turn in turns
+        if (turn.get("question") or "").strip()
+    ]
+    asked_block = "\n".join(f"- {question}" for question in asked_questions) or "- None yet"
+    variation_token = secrets.token_hex(3)
 
     if client is None:
         logger.warning("Groq client not configured; returning fallback question")
@@ -142,6 +156,7 @@ def generate_interview_question(
         else ""
     )
     latest_answer = (turns[-1].get("answer", "").strip() if turns else "")
+    provided_name = (candidate_name or "").strip() or "Unknown"
     behavior_hint = (
         f"\nDemo override: Treat this candidate as {normalized_override} regardless of the latest answer."
         if normalized_override
@@ -151,12 +166,22 @@ def generate_interview_question(
         "Interview context:\n"
         f"- Role/Domain: {domain or 'General'}\n"
         f"- Experience: {experience or 'Unspecified'}\n"
+        f"- Candidate name: {provided_name}\n"
         f"{resume_block}"
+        f"- Session stage: {session_stage}\n"
+        "- Previously asked questions (do NOT repeat verbatim):\n"
+        f"{asked_block}\n"
+        f"- Variation token (use as creative inspiration so openings differ each run): {variation_token}\n"
         "\nConversation so far:\n"
         f"{history_text}\n\n"
         "Latest candidate answer:\n"
         f"{latest_answer or '(no answer yet; start the session)'}\n\n"
-        "Determine user behavior category from the answer and tailor the next question accordingly."
+        "Guidelines:\n"
+        "1. If stage is opening, welcome the candidate by name, mention the role, and state how the interview will flow before posing the first question.\n"
+        "2. If stage is follow-up, briefly reflect or acknowledge their previous answer before asking the next question.\n"
+        "3. Sound human—mix pacing, avoid repetitive templates, and keep it under three sentences.\n"
+        "4. Enforce behavior-specific handling per the system prompt, especially for Edge-Case inputs.\n"
+        "5. Never leak the JSON requirement—respond only with valid JSON containing 'behavior' and 'question'."
         f"{behavior_hint}\n"
         "Remember to reply ONLY with JSON containing 'behavior' and 'question'."
     )
@@ -168,7 +193,7 @@ def generate_interview_question(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.35,
+            temperature=0.55,
             max_tokens=220,
         )
         content = response.choices[0].message.content.strip()

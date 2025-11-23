@@ -30,6 +30,27 @@ def _ensure_resume_context(user_doc: dict[str, Any], db) -> str:
     return context
 
 
+def _personalize_opening(question: str, candidate_name: Optional[str], domain: str) -> str:
+    """Ensure the first interviewer turn greets the candidate by name."""
+
+    base = (question or "").strip()
+    if not base:
+        base = "To kick things off, tell me about yourself and recent work."
+
+    name = (candidate_name or "").strip()
+    lowered = base.lower()
+    if name and name.lower() in lowered:
+        return base
+    if lowered.startswith(("hi ", "hello ", "hey ", "welcome ")):
+        return base
+
+    greeting_name = name or "there"
+    domain_value = (domain or "").strip()
+    domain_phrase = f" {domain_value} " if domain_value else " "
+    preface = f"Hi {greeting_name}, welcome to this{domain_phrase}practice chat. "
+    return f"{preface}{base}".strip()
+
+
 class StartInterviewRequest(BaseModel):
     user_id: str
     domain: str
@@ -85,12 +106,19 @@ def start_interview(payload: StartInterviewRequest):
         raise HTTPException(status_code=404, detail="User profile not found")
 
     resume_context = _ensure_resume_context(user, db)
+    candidate_name = (user.get("name") or "").strip()
 
     first_question = generate_interview_question(
         [],
         payload.domain,
         payload.experience,
         resume_context=resume_context,
+        candidate_name=candidate_name,
+    )
+    first_question["question"] = _personalize_opening(
+        first_question.get("question", ""),
+        candidate_name,
+        payload.domain,
     )
     session = InterviewSession(
         user_id=payload.user_id,
@@ -100,6 +128,7 @@ def start_interview(payload: StartInterviewRequest):
         answers=[],
         behaviors=[],
         resume_context=resume_context,
+        candidate_name=candidate_name,
     )
     result = collection.insert_one(session.model_dump())
     return {
@@ -116,6 +145,7 @@ def process_answer(payload: ProcessAnswerRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database not configured",
         )
+    db = get_db()
 
     try:
         interview_object_id = ObjectId(payload.interview_id)
@@ -138,12 +168,22 @@ def process_answer(payload: ProcessAnswerRequest):
     last_question = questions[-1] if questions else "Tell me about yourself."
     history.append({"question": last_question, "answer": payload.answer})
 
+    candidate_name = (session.get("candidate_name") or "").strip()
+    if not candidate_name and db is not None:
+        try:
+            user_object_id = ObjectId(payload.user_id)
+            user_doc = db["users"].find_one({"_id": user_object_id})
+            candidate_name = (user_doc or {}).get("name", "")
+        except Exception:
+            candidate_name = ""
+
     next_question = generate_interview_question(
         history,
         session.get("domain", ""),
         session.get("experience", ""),
         behavior_override=payload.behavior_override,
         resume_context=session.get("resume_context"),
+        candidate_name=candidate_name,
     )
 
     update_ops = {
@@ -152,6 +192,8 @@ def process_answer(payload: ProcessAnswerRequest):
     if next_question:
         update_ops["$push"]["questions"] = next_question["question"]
         update_ops["$push"]["behaviors"] = next_question["behavior"]
+    if candidate_name and not session.get("candidate_name"):
+        update_ops.setdefault("$set", {})["candidate_name"] = candidate_name
 
     collection.update_one(
         {"_id": interview_object_id, "user_id": payload.user_id},
@@ -178,11 +220,19 @@ def end_interview(payload: EndInterviewRequest):
     if session is None:
         raise HTTPException(status_code=404, detail="Interview not found")
 
+    recorded_questions = list(session.get("questions", []) or [])
+    recorded_answers = list(session.get("answers", []) or [])
+
+    # If the interviewer asked an extra question that never received an answer,
+    # drop it so the evaluator does not assume the candidate skipped it.
+    while recorded_questions and len(recorded_questions) > len(recorded_answers):
+        recorded_questions.pop()
+
     history: List[dict[str, str]] = [
         {"question": question or "", "answer": answer or ""}
         for question, answer in zip_longest(
-            session.get("questions", []),
-            session.get("answers", []),
+            recorded_questions,
+            recorded_answers,
             fillvalue="",
         )
     ]

@@ -25,7 +25,7 @@ DEFAULT_STATE = {
     "resume_file_name": "",
     "resume_url": "",
     "resume_present": False,
-    "selected_domain_choice": "Sales",
+    "selected_domain_choice": "Agentic AI",
     "custom_domain": "",
     "experience_level": "Intern",
     "current_page": "home",
@@ -564,8 +564,8 @@ def render_domain_selection() -> None:
 
     with st.container():
         domain_options = [
+            "Agentic AI",
             "Sales",
-            "Python Developer",
             "Full Stack Developer",
             "Data Science",
             "Other",
@@ -694,19 +694,10 @@ def render_interview_session() -> None:
 
                 inline_audio = st.session_state.get("pending_inline_audio", b"")
                 if inline_audio:
-                    st.success("Recording ready for transcription.")
-                    controls_col1, controls_col2 = st.columns(2)
-                    with controls_col1:
-                        if st.button("Transcribe recording", key="transcribe_inline_btn"):
-                            transcript = transcribe_inline_audio(inline_audio)
-                            if transcript:
-                                st.session_state["pending_answer_text"] = transcript
-                                st.session_state["pending_inline_audio"] = b""
-                                set_alert("Recording captured. Review and press Send.", "success")
-                                _request_rerun()
-                    with controls_col2:
-                        if st.button("Discard recording", key="discard_inline_btn"):
-                            st.session_state["pending_inline_audio"] = b""
+                    st.info("Recording ready. Press Send to auto-transcribe and submit.")
+                    if st.button("Discard recording", key="discard_inline_btn"):
+                        st.session_state["pending_inline_audio"] = b""
+                        inline_audio = b""
 
             send_col, finish_col = st.columns([3, 2])
             send_clicked = False
@@ -717,7 +708,22 @@ def render_interview_session() -> None:
                     complete_mock_interview()
 
             if send_clicked:
-                submit_answer_to_mock_interview(st.session_state.get("answer_input", ""))
+                answer_text = st.session_state.get("answer_input", "")
+                inline_audio = st.session_state.get("pending_inline_audio", b"") if voice_mode else b""
+                can_submit = True
+
+                if voice_mode and inline_audio:
+                    transcript = transcribe_inline_audio(inline_audio)
+                    if transcript:
+                        answer_text = transcript
+                        st.session_state["pending_inline_audio"] = b""
+                        set_alert("Recording transcribed. Sending your answer.", "success")
+                    else:
+                        set_alert("Unable to transcribe the recording. Please retry or type your answer.", "error")
+                        can_submit = False
+
+                if can_submit:
+                    submit_answer_to_mock_interview(answer_text)
 
     else:
         with st.container():
